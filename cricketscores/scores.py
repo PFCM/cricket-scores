@@ -20,7 +20,10 @@ def _transfer_dict_keys(key_pairs, source, sink):
 
 def _get_teams(match):
     """Get real names for the teams involved in the match"""
-    teams = [team['Name'] for team in match.find_all('Tm')]
+    teams = [{
+        'name': team['Name'],
+        'id': team['id']
+    } for team in match.find_all('Tm')]
     if len(teams) != 2:
         return None
     return teams
@@ -31,6 +34,40 @@ def _construct_time(time_element):
     date = time_element['Dt']
     start_time = time_element['stTme']
     return dateutil.parser.parse('{} {} GMT'.format(date, start_time))
+
+
+def _parse_innings(detail, bat, bowl):
+    """Parse an innings from the three constituent parts."""
+    # the detail has tihngs like the required run rate, we don't really care
+    batting = {
+        'team': bat['sName'],
+        'declare': bool(bat.Inngs['Decl']),
+        'follow_on': bool(bat.Inngs['FollowOn']),
+        'overs': float(bat.Inngs['ovrs']),
+        'runs': int(bat.Inngs['r']),
+        'wickets': int(bat.Inngs['wkts'])
+    }
+    bowling = {
+        'team': bowl['sName'],
+        'declare': bool(bowl.Inngs['Decl']),
+        'follow_on': bool(bowl.Inngs['FollowOn']),
+        'overs': float(bowl.Inngs['ovrs']),
+        'runs': int(bowl.Inngs['r']),
+        'wickets': int(bowl.Inngs['wkts'])
+    }
+
+    return {'batting': batting, 'bowling': bowling}
+
+
+def _parse_score(score_element):
+    """Get the score info (as a list of inningses)"""
+    # an innings should be 3 elements
+    children = [child for child in score_element.children if child != '\n']
+    first_innings = children[:3]
+    score = _parse_innings(*first_innings)
+    if children[3:]:
+        score.append(_parse_innings(*children[3:]))
+    return score
 
 
 def _parse_single_match(match):
@@ -60,8 +97,11 @@ def _parse_single_match(match):
     state = match.find('state')
     data = _transfer_dict_keys(state_keys, state, data)
 
-    data['time'] = _construct_time(
-        match.find('Tme')).strftime('%G-%m-%dT%H:%M:%S%z')
+    data['time'] = _construct_time(match.find('Tme'))
+
+    score = match.find('mscr')
+    if score:
+        data['score'] = _parse_score(score)
 
     return data
 
@@ -79,7 +119,6 @@ def _group_by(key, data):
     groups = collections.OrderedDict()
 
     for item in data:
-        print(item.prettify())
         if item[key] not in groups:
             groups[item[key]] = []
         groups[item[key]].append(item)
@@ -121,4 +160,5 @@ if __name__ == '__main__':
     import json
     matches = request_matches()
     for m in matches:
+        m['time'] = m['time'].strftime('%G-%m-%dT%H:%M:%S%z')
         print(json.dumps(m, indent=2))
